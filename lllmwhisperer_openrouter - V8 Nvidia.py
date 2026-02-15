@@ -72,10 +72,11 @@ OPENROUTER_MODELS = [
 ]
 
 NVIDIA_MODELS = [
+    "deepseek-ai/deepseek-v3.1",
     "moonshotai/kimi-k2.5",
-    "deepseek-ai/deepseek-r1",
+    "meta/llama-3.1-8b-instruct",
+    "meta/llama-3.3-70b-instruct",
     "nvidia/llama-3.1-nemotron-70b-instruct",
-    "meta/llama-3.1-405b-instruct",
 ]
 
 # Inicialización por defecto con OpenRouter
@@ -629,11 +630,13 @@ def analizar_con_llm(
         }
         
         try:
+            payload_size = len(json.dumps(data))
             print(
                 f"Enviando solicitud a NVIDIA API (modelo: {model_name}) para '{nombre_archivo_base}'..."
             )
+            print(f"DEBUG: Tamaño del payload: {payload_size} bytes.")
             response = requests.post(
-                api_url, headers=headers, data=json.dumps(data), timeout=360
+                api_url, headers=headers, data=json.dumps(data), timeout=300
             )
             response.raise_for_status()
             respuesta_json = response.json()
@@ -652,7 +655,7 @@ def analizar_con_llm(
                     mensajes_resumen_procesamiento.append(msg)
                 return None
         except requests.exceptions.Timeout as e:
-            msg = f"❌ Error API NVIDIA '{nombre_archivo_base}': Timeout."
+            msg = f"❌ Error API NVIDIA '{nombre_archivo_base}': Timeout después de 300 segundos (Modelo: {model_name})."
             print(msg)
             with thread_lock:
                 mensajes_resumen_procesamiento.append(msg)
@@ -669,7 +672,7 @@ def analizar_con_llm(
             print(msg)
             print(details)
             with thread_lock:
-                mensajes_resumen_procesamiento.append(msg + "\n" + details)
+                mensajes_resumen_procesamiento.append(f"{msg}\n{details}")
 
             if status_code == 429:
                 raise RateLimitException(msg) from e
