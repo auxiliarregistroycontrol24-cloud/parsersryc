@@ -1094,7 +1094,7 @@ def actualizar_fila_en_tabla(ventana_principal, tabla_treeview, datos_fila):
     ventana_principal.after(0, actualizar)
 
 
-def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
+def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback, alternate_retry_callback):
     tabla_ventana = tk.Toplevel(main_root_ref)
     tabla_ventana.title("Tabla Resumen de Archivos Procesados (En Vivo)")
     tabla_ventana.geometry("1770x500")
@@ -1208,6 +1208,14 @@ def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
         state=tk.DISABLED,
     )
     retry_button.pack(side=tk.RIGHT, padx=5)
+
+    alternate_retry_button = ttk.Button(
+        button_frame,
+        text="Reintentar con Proveedor Alterno",
+        command=alternate_retry_callback,
+        state=tk.DISABLED,
+    )
+    alternate_retry_button.pack(side=tk.RIGHT, padx=5)
 
     def on_click(event):
         if tree.identify_region(event.x, event.y) != "cell":
@@ -1629,7 +1637,7 @@ def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
     # Vincular el clic derecho (Button-3 en Windows/Linux)
     tree.bind("<Button-3>", on_right_click)
 
-    return tree, retry_button
+    return tree, retry_button, alternate_retry_button
 
 
 def determinar_nivel_academico(texto_documento):
@@ -1891,6 +1899,7 @@ def procesar_archivos_seleccionados(
     selected_models,
     is_retry=False,
     selected_provider="OpenRouter",
+    alt_retry_button=None,
 ):
 
     global unprocessed_files_paths, processed_data_cache, original_file_list_for_saving
@@ -1962,13 +1971,20 @@ def procesar_archivos_seleccionados(
 
             if unprocessed_files_paths:
                 retry_button.config(state=tk.NORMAL)
+                if alt_retry_button:
+                    alt_retry_button.config(state=tk.NORMAL)
+                    target_name = "NVIDIA" if selected_provider == "OpenRouter" else "OpenRouter"
+                    alt_retry_button.config(text=f"Reintentar con {target_name}")
+                
                 messagebox.showwarning(
                     "Proceso con Fallos",
-                    f"{len(unprocessed_files_paths)} archivo(s) no se procesaron correctamente.\nPuede usar el botón 'Reintentar Archivos Fallidos' en la ventana de resultados para intentarlo de nuevo.",
+                    f"{len(unprocessed_files_paths)} archivo(s) no se procesaron correctamente.\nPuede usar los botones de reintento en la ventana de resultados para intentarlo de nuevo.",
                     parent=ventana_principal,
                 )
             else:
                 retry_button.config(state=tk.DISABLED)
+                if alt_retry_button:
+                    alt_retry_button.config(state=tk.DISABLED)
 
             if original_file_list_for_saving:
                 directorio_salida = os.path.dirname(original_file_list_for_saving[0])
@@ -2019,6 +2035,7 @@ def iniciar_procesamiento_en_hilo(
 
 
     retry_button_ref = None
+    alt_retry_button_ref = None
     tabla_treeview = None
 
     def iniciar_reintento():
@@ -2090,6 +2107,65 @@ def iniciar_procesamiento_en_hilo(
             selected_models_for_retry,
             is_retry=True,
             selected_provider=selected_provider,
+            alt_retry_button=alt_retry_button_ref,
+        )
+
+    def iniciar_reintento_alterno():
+        global unprocessed_files_paths, mensajes_resumen_procesamiento
+
+        # 1. Determinar el proveedor opuesto
+        current_p = provider_var.get()
+        target_provider = "NVIDIA" if current_p == "OpenRouter" else "OpenRouter"
+
+        # 2. Validar API Key del opuesto
+        if target_provider == "NVIDIA" and not NVIDIA_API_KEY:
+            messagebox.showerror("API Key Faltante", "No se encontró NVIDIA_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
+            return
+        if target_provider == "OpenRouter" and not OPENROUTER_API_KEY:
+            messagebox.showerror("API Key Faltante", "No se encontró OPENROUTER_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
+            return
+
+        # 3. Cargar modelos del opuesto (GLOBAL LISTS)
+        target_models = NVIDIA_MODELS if target_provider == "NVIDIA" else OPENROUTER_MODELS
+
+        files_to_retry_info = list(unprocessed_files_paths)
+        if not files_to_retry_info:
+            messagebox.showinfo("Información", "No hay archivos fallidos para reintentar.", parent=ventana_principal)
+            return
+
+        unprocessed_files_paths.clear()
+        mensajes_resumen_procesamiento.append(f"\n{'='*20} INICIANDO REINTENTO ALTERNO ({target_provider}) {'='*20}\n")
+
+        if retry_button_ref: retry_button_ref.config(state=tk.DISABLED)
+        if alt_retry_button_ref: alt_retry_button_ref.config(state=tk.DISABLED)
+        boton_seleccionar.config(state=tk.DISABLED)
+
+        archivos_para_reintentar = []
+        for i, file_info in enumerate(files_to_retry_info):
+            path = file_info["path"]
+            # Para reintento alterno, simplemente usamos el primer modelo del nuevo proveedor o repartimos
+            next_model = target_models[i % len(target_models)]
+
+            if tabla_treeview and tabla_treeview.exists(path):
+                valores_reintento = (os.path.basename(path), f"Reintentando ({target_provider})...", "...", "...", "...", "Abrir Archivo", "", "(Realizada)", "(Pendiente)")
+                tabla_treeview.item(path, values=valores_reintento, tags=("accion", path, ""))
+            
+            archivos_para_reintentar.append((i, path, next_model))
+
+        procesar_archivos_seleccionados(
+            archivos_para_reintentar,
+            boton_seleccionar,
+            boton_ver_tabla,
+            etiqueta_estado,
+            barra_progreso,
+            etiqueta_etr,
+            ventana_principal,
+            tabla_treeview,
+            retry_button_ref,
+            target_models,
+            is_retry=True,
+            selected_provider=target_provider,
+            alt_retry_button=alt_retry_button_ref,
         )
 
 
@@ -2112,8 +2188,8 @@ def iniciar_procesamiento_en_hilo(
             boton_seleccionar.config(state=tk.NORMAL)
         return
 
-    tabla_treeview, retry_button_ref = crear_tabla_resumen_en_vivo(
-        ventana_principal, iniciar_reintento
+    tabla_treeview, retry_button_ref, alt_retry_button_ref = crear_tabla_resumen_en_vivo(
+        ventana_principal, iniciar_reintento, iniciar_reintento_alterno
     )
 
     try:
@@ -2156,6 +2232,7 @@ def iniciar_procesamiento_en_hilo(
             selected_models,
             is_retry=False,
             selected_provider=selected_provider,
+            alt_retry_button=alt_retry_button_ref,
         )
 
 
@@ -2180,7 +2257,7 @@ def show_last_results_table(main_root_ref):
         )
         return
 
-    tabla_recreada, _ = crear_tabla_resumen_en_vivo(main_root_ref, lambda: None)
+    tabla_recreada, _, _ = crear_tabla_resumen_en_vivo(main_root_ref, lambda: None, lambda: None)
     toplevel_window = tabla_recreada.winfo_toplevel()
     toplevel_window.title("Última Tabla de Resultados Guardada")
 
