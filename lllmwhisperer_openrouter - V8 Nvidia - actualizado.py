@@ -27,11 +27,16 @@ LLMWHISPERER_API_KEY_3 = os.getenv("LLMWHISPERER_API_KEY_3")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_KEY_2 = os.getenv("OPENROUTER_API_KEY_2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # --- CONFIGURACIÓN DE WORKERS Y MODELOS ---
-WORKER_MODELS = [
+CURRENT_PROVIDER = "OpenRouter"
+
+OPENROUTER_MODELS = [
+
     # "deepseek/deepseek-chat-v3-0324:free",
     "moonshotai/kimi-k2:free",
     # "x-ai/grok-4-fast:free",
@@ -66,7 +71,22 @@ WORKER_MODELS = [
     # "nvidia/nemotron-nano-9b-v2:free",
 ]
 
+NVIDIA_MODELS = [
+    "deepseek-ai/deepseek-v3.1",
+    "z-ai/glm5",
+    "deepseek-ai/deepseek-v3.1-terminus",
+    "deepseek-ai/deepseek-v3.2",
+    #"moonshotai/kimi-k2.5",
+    #"meta/llama-3.1-8b-instruct",
+    #"meta/llama-3.3-70b-instruct",
+    #"nvidia/llama-3.1-nemotron-70b-instruct",
+]
+
+# Inicialización por defecto con OpenRouter
+WORKER_MODELS = OPENROUTER_MODELS[:]
+
 MAX_WORKERS = len(WORKER_MODELS)
+
 
 YOUR_SITE_URL = "https://github.com/tu_usuario/tu_proyecto"
 YOUR_SITE_NAME = "Procesador AHK"
@@ -578,99 +598,192 @@ def analizar_con_llm(
     api_url,
     nombre_archivo_base,
     force_api_key_num=None,
+    provider="OpenRouter",
 ):
     global mensajes_resumen_procesamiento, active_openrouter_key_index
 
-    with thread_lock:
-        current_api_key_num = (
-            force_api_key_num if force_api_key_num else active_openrouter_key_index
-        )
-        if current_api_key_num == 1:
-            api_token = OPENROUTER_API_KEY
-        elif current_api_key_num == 2 and OPENROUTER_API_KEY_2:
-            api_token = OPENROUTER_API_KEY_2
-        else:
-            msg = f"❌ No hay una clave de API de OpenRouter válida (intentando usar la #{current_api_key_num}) para '{nombre_archivo_base}'."
-            print(msg)
-            mensajes_resumen_procesamiento.append(msg)
-            return None
-
-    print(
-        f"\nPreparando para enviar a OpenRouter para '{nombre_archivo_base}' usando modelo '{model_name}' (API Key #{current_api_key_num})..."
-    )
-    prompt_completo = f"Aquí tienes el contenido de un documento (originalmente '{nombre_archivo_base}'):\n--- INICIO DEL DOCUMENTO ---\n{texto_documento}\n--- FIN DEL DOCUMENTO ---\nPor favor, sigue estas instrucciones detalladamente basadas ÚNICAMENTE en el documento proporcionado:\n{pregunta_o_instruccion}"
-
-    headers = {
-        "Authorization": f"Bearer {api_token}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": YOUR_SITE_URL,
-        "X-Title": YOUR_SITE_NAME,
-    }
-    data = {
-        "model": model_name,
-        "messages": [{"role": "user", "content": prompt_completo}],
-        "stream": False,
-        "max_tokens": 4000,
-        "temperature": 0.15,
-    }
-
-    try:
-        print(
-            f"Enviando solicitud a OpenRouter (modelo: {model_name}, Key #{current_api_key_num}) para '{nombre_archivo_base}'..."
-        )
-        response = requests.post(
-            api_url, headers=headers, data=json.dumps(data), timeout=360
-        )
-        response.raise_for_status()
-        respuesta_json = response.json()
-        print(f"✅ Respuesta recibida de OpenRouter API para '{nombre_archivo_base}'.")
-        if (
-            respuesta_json.get("choices")
-            and len(respuesta_json["choices"]) > 0
-            and respuesta_json["choices"][0].get("message")
-            and "content" in respuesta_json["choices"][0]["message"]
-        ):
-            return respuesta_json["choices"][0]["message"]["content"]
-        else:
-            msg = f"❌ Error API OpenRouter '{nombre_archivo_base}': Respuesta sin formato esperado."
+    # Determinar qué API y credenciales usar según el proveedor
+    if provider == "NVIDIA":
+        api_token = NVIDIA_API_KEY
+        if not api_token:
+            msg = f"❌ No hay una clave de API de NVIDIA válida para '{nombre_archivo_base}'."
             print(msg)
             with thread_lock:
                 mensajes_resumen_procesamiento.append(msg)
             return None
-    except requests.exceptions.Timeout as e:
-        msg = f"❌ Error API OpenRouter '{nombre_archivo_base}': Timeout."
-        print(msg)
-        with thread_lock:
-            mensajes_resumen_procesamiento.append(msg)
-        raise ServerSideApiException(msg) from e
-    except requests.exceptions.RequestException as e:
-        status_code = e.response.status_code if e.response is not None else 0
-        details = (
-            f"Detalles: {status_code} - {e.response.text}"
-            if e.response is not None
-            else ""
+        
+        print(
+            f"\nPreparando para enviar a NVIDIA API para '{nombre_archivo_base}' usando modelo '{model_name}'..."
         )
-        msg = f"❌ Error API OpenRouter '{nombre_archivo_base}' (Modelo: {model_name}, Key: #{current_api_key_num}): {e}"
-
-        print(msg)
-        print(details)
-        with thread_lock:
-            mensajes_resumen_procesamiento.append(msg + "\n" + details)
-
-        if status_code == 429:
-            raise RateLimitException(msg) from e
-        if 500 <= status_code < 600:
+        
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        
+        prompt_completo = f"Aquí tienes el contenido de un documento (originalmente '{nombre_archivo_base}'):\n--- INICIO DEL DOCUMENTO ---\n{texto_documento}\n--- FIN DEL DOCUMENTO ---\nPor favor, sigue estas instrucciones detalladamente basadas ÚNICAMENTE en el documento proporcionado:\n{pregunta_o_instruccion}"
+        
+        data = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt_completo}],
+            "stream": False,
+            "max_tokens": 4096,
+            "temperature": 0.15,
+        }
+        
+        try:
+            payload_size = len(json.dumps(data))
+            print(
+                f"Enviando solicitud a NVIDIA API (modelo: {model_name}) para '{nombre_archivo_base}'..."
+            )
+            print(f"DEBUG: Tamaño del payload: {payload_size} bytes.")
+            response = requests.post(
+                api_url, headers=headers, data=json.dumps(data), timeout=300
+            )
+            response.raise_for_status()
+            respuesta_json = response.json()
+            print(f"✅ Respuesta recibida de NVIDIA API para '{nombre_archivo_base}'.")
+            if (
+                respuesta_json.get("choices")
+                and len(respuesta_json["choices"]) > 0
+                and respuesta_json["choices"][0].get("message")
+                and "content" in respuesta_json["choices"][0]["message"]
+            ):
+                return respuesta_json["choices"][0]["message"]["content"]
+            else:
+                msg = f"❌ Error API NVIDIA '{nombre_archivo_base}': Respuesta sin formato esperado."
+                print(msg)
+                with thread_lock:
+                    mensajes_resumen_procesamiento.append(msg)
+                return None
+        except requests.exceptions.Timeout as e:
+            msg = f"❌ Error API NVIDIA '{nombre_archivo_base}': Timeout después de 300 segundos (Modelo: {model_name})."
+            print(msg)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg)
             raise ServerSideApiException(msg) from e
-        return None
-    except Exception as e:
-        msg = (
-            f"❌ Error inesperado con OpenRouter API para '{nombre_archivo_base}': {e}"
-        )
-        print(msg)
-        traceback.print_exc()
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else 0
+            details = (
+                f"Detalles: {status_code} - {e.response.text}"
+                if e.response is not None
+                else ""
+            )
+            msg = f"❌ Error API NVIDIA '{nombre_archivo_base}' (Modelo: {model_name}): {e}"
+
+            print(msg)
+            print(details)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(f"{msg}\n{details}")
+
+            if status_code == 429:
+                raise RateLimitException(msg) from e
+            if 500 <= status_code < 600:
+                raise ServerSideApiException(msg) from e
+            return None
+        except Exception as e:
+            msg = (
+                f"❌ Error inesperado con NVIDIA API para '{nombre_archivo_base}': {e}"
+            )
+            print(msg)
+            traceback.print_exc()
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg + f"\n{traceback.format_exc()}")
+            return None
+    
+    else:  # OpenRouter (default)
         with thread_lock:
-            mensajes_resumen_procesamiento.append(msg + f"\n{traceback.format_exc()}")
-        return None
+            current_api_key_num = (
+                force_api_key_num if force_api_key_num else active_openrouter_key_index
+            )
+            if current_api_key_num == 1:
+                api_token = OPENROUTER_API_KEY
+            elif current_api_key_num == 2 and OPENROUTER_API_KEY_2:
+                api_token = OPENROUTER_API_KEY_2
+            else:
+                msg = f"❌ No hay una clave de API de OpenRouter válida (intentando usar la #{current_api_key_num}) para '{nombre_archivo_base}'."
+                print(msg)
+                mensajes_resumen_procesamiento.append(msg)
+                return None
+
+        print(
+            f"\nPreparando para enviar a OpenRouter para '{nombre_archivo_base}' usando modelo '{model_name}' (API Key #{current_api_key_num})..."
+        )
+        prompt_completo = f"Aquí tienes el contenido de un documento (originalmente '{nombre_archivo_base}'):\n--- INICIO DEL DOCUMENTO ---\n{texto_documento}\n--- FIN DEL DOCUMENTO ---\nPor favor, sigue estas instrucciones detalladamente basadas ÚNICAMENTE en el documento proporcionado:\n{pregunta_o_instruccion}"
+
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": YOUR_SITE_URL,
+            "X-Title": YOUR_SITE_NAME,
+        }
+        data = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt_completo}],
+            "stream": False,
+            "max_tokens": 4000,
+            "temperature": 0.15,
+        }
+
+        try:
+            print(
+                f"Enviando solicitud a OpenRouter (modelo: {model_name}, Key #{current_api_key_num}) para '{nombre_archivo_base}'..."
+            )
+            response = requests.post(
+                api_url, headers=headers, data=json.dumps(data), timeout=360
+            )
+            response.raise_for_status()
+            respuesta_json = response.json()
+            print(f"✅ Respuesta recibida de OpenRouter API para '{nombre_archivo_base}'.")
+            if (
+                respuesta_json.get("choices")
+                and len(respuesta_json["choices"]) > 0
+                and respuesta_json["choices"][0].get("message")
+                and "content" in respuesta_json["choices"][0]["message"]
+            ):
+                return respuesta_json["choices"][0]["message"]["content"]
+            else:
+                msg = f"❌ Error API OpenRouter '{nombre_archivo_base}': Respuesta sin formato esperado."
+                print(msg)
+                with thread_lock:
+                    mensajes_resumen_procesamiento.append(msg)
+                return None
+        except requests.exceptions.Timeout as e:
+            msg = f"❌ Error API OpenRouter '{nombre_archivo_base}': Timeout."
+            print(msg)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg)
+            raise ServerSideApiException(msg) from e
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else 0
+            details = (
+                f"Detalles: {status_code} - {e.response.text}"
+                if e.response is not None
+                else ""
+            )
+            msg = f"❌ Error API OpenRouter '{nombre_archivo_base}' (Modelo: {model_name}, Key: #{current_api_key_num}): {e}"
+
+            print(msg)
+            print(details)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg + "\n" + details)
+
+            if status_code == 429:
+                raise RateLimitException(msg) from e
+            if 500 <= status_code < 600:
+                raise ServerSideApiException(msg) from e
+            return None
+        except Exception as e:
+            msg = (
+                f"❌ Error inesperado con OpenRouter API para '{nombre_archivo_base}': {e}"
+            )
+            print(msg)
+            traceback.print_exc()
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg + f"\n{traceback.format_exc()}")
+            return None
+
 
 
 def analizar_con_gemini(texto_documento, pregunta_o_instruccion, nombre_archivo_base):
@@ -780,54 +893,6 @@ def extraer_datos_completos(respuesta_llm):
     if match_script:
         datos["Script Template"] = match_script.group(1).strip()
     return datos
-
-
-def procesar_validacion_creditos(texto_script_ahk, total_esperado_str):
-    """
-    1. Busca los créditos marcados como ##NUMERO## en el texto generado.
-    2. Suma los valores encontrados.
-    3. Compara la suma con el total de créditos del encabezado.
-    4. Elimina las marcas (##NUMERO##) para dejar el script limpio con {Tab}{Tab}.
-    
-    Retorna: (script_limpio_para_guardar, es_valido, mensaje_validacion)
-    """
-    import re
-
-    # --- 1. Preparar el total esperado ---
-    try:
-        # Limpieza básica por si el LLM devuelve texto sucio
-        total_header = int(float(str(total_esperado_str).strip()))
-    except ValueError:
-        # Si el total del encabezado no es válido, limpiamos el script y retornamos error
-        script_limpio = re.sub(r"##\d+##", "", texto_script_ahk)
-        return script_limpio, False, f"Error: Total extraído '{total_esperado_str}' no es un número válido."
-
-    # --- 2. Extraer créditos individuales (Patrón ##dígitos##) ---
-    patron_temp = r"##(\d+)##"
-    creditos_encontrados = re.findall(patron_temp, texto_script_ahk)
-    
-    if not creditos_encontrados:
-        # Si no hay marcas, devolvemos el texto original (ya estaba limpio o el LLM no siguió la instrucción)
-        return texto_script_ahk, False, "No se encontraron créditos individuales marcados con ## ##."
-
-    # --- 3. Sumar ---
-    suma_real = sum(int(c) for c in creditos_encontrados)
-
-    # --- 4. Comparar ---
-    es_valido = (suma_real == total_header)
-    if es_valido:
-        msg = f"CORRECTO (Suma materias: {suma_real} == Total encabezado: {total_header})"
-    else:
-        msg = f"DISCREPANCIA (Suma materias: {suma_real} vs Total encabezado: {total_header})"
-
-    # --- 5. LIMPIAR EL SCRIPT PARA GUARDARLO ---
-    # Reemplazamos "##3##" por "" (cadena vacía).
-    # Como en el prompt solicitaremos: {Tab}##3##{Tab}
-    # Al quitar ##3## el resultado final será: {Tab}{Tab} (Formato requerido por Oracle)
-    script_limpio = re.sub(patron_temp, "", texto_script_ahk)
-
-    return script_limpio, es_valido, msg
-
 
 
 def sanitizar_nombre_archivo(nombre):
@@ -1032,7 +1097,7 @@ def actualizar_fila_en_tabla(ventana_principal, tabla_treeview, datos_fila):
     ventana_principal.after(0, actualizar)
 
 
-def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
+def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback, alternate_retry_callback):
     tabla_ventana = tk.Toplevel(main_root_ref)
     tabla_ventana.title("Tabla Resumen de Archivos Procesados (En Vivo)")
     tabla_ventana.geometry("1770x500")
@@ -1146,6 +1211,14 @@ def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
         state=tk.DISABLED,
     )
     retry_button.pack(side=tk.RIGHT, padx=5)
+
+    alternate_retry_button = ttk.Button(
+        button_frame,
+        text="Reintentar con Proveedor Alterno",
+        command=alternate_retry_callback,
+        state=tk.DISABLED,
+    )
+    alternate_retry_button.pack(side=tk.RIGHT, padx=5)
 
     def on_click(event):
         if tree.identify_region(event.x, event.y) != "cell":
@@ -1567,7 +1640,7 @@ def crear_tabla_resumen_en_vivo(main_root_ref, retry_callback):
     # Vincular el clic derecho (Button-3 en Windows/Linux)
     tree.bind("<Button-3>", on_right_click)
 
-    return tree, retry_button
+    return tree, retry_button, alternate_retry_button
 
 
 def determinar_nivel_academico(texto_documento):
@@ -1588,7 +1661,9 @@ def worker_process_file(
     model_a_usar,
     worker_id,
     is_retry=False,
+    selected_provider="OpenRouter",
 ):
+
     global mensajes_resumen_procesamiento, unprocessed_files_paths
 
     while not archivo_queue.empty():
@@ -1651,15 +1726,19 @@ def worker_process_file(
                 try:
                     time.sleep(1)
                     mensaje_log_actual.append(
-                        f"INFO: Intentando análisis con el modelo asignado: {model_a_usar}."
+                        f"INFO: Intentando análisis con el modelo asignado: {model_a_usar} (Proveedor: {selected_provider})."
                     )
+                    # Seleccionar la URL correcta según el proveedor
+                    api_url_to_use = NVIDIA_API_URL if selected_provider == "NVIDIA" else OPENROUTER_API_URL
                     respuesta_llm = analizar_con_llm(
                         texto_limpio_para_llm,
                         prompt_a_usar,
                         model_a_usar,
-                        OPENROUTER_API_URL,
+                        api_url_to_use,
                         nombre_base_archivo,
+                        provider=selected_provider,
                     )
+
                 except (RateLimitException, ServerSideApiException) as e:
                     mensaje_log_actual.append(
                         f"❌ FALLO DE API con el modelo {model_a_usar}: {e}. El archivo no será procesado por este worker."
@@ -1738,19 +1817,8 @@ def worker_process_file(
                                 f"{nombre_sanitizado}.ahk",
                             )
                             try:
-                                # --- VALIDACIÓN DE CRÉDITOS ---
-                                # Procesar validación: sumar créditos marcados y comparar con total
-                                script_para_guardar, es_valido, msg_validacion = procesar_validacion_creditos(
-                                    script_final, 
-                                    datos_completos['Creditos']
-                                )
-                                mensaje_log_actual.append(
-                                    f"{'✅' if es_valido else '⚠️'} Validación de créditos: {msg_validacion}"
-                                )
-                                
-                                # Limpiar marcadores de código markdown si existen
                                 script_final_limpio = limpiar_marcadores_codigo(
-                                    script_para_guardar
+                                    script_final
                                 )
                                 with open(ruta_ahk, "w", encoding="utf-8") as f:
                                     f.write(script_final_limpio)
@@ -1763,7 +1831,6 @@ def worker_process_file(
                                 mensaje_log_actual.append(
                                     f"❌ Error guardando AHK: {e}"
                                 )
-
                         else:
                             mensaje_log_actual.append(
                                 f"❌ No se generó script: faltan datos clave (Nombre/Plantilla)."
@@ -1834,7 +1901,10 @@ def procesar_archivos_seleccionados(
     retry_button,
     selected_models,
     is_retry=False,
+    selected_provider="OpenRouter",
+    alt_retry_button=None,
 ):
+
     global unprocessed_files_paths, processed_data_cache, original_file_list_for_saving
 
     if not is_retry:
@@ -1883,9 +1953,11 @@ def procesar_archivos_seleccionados(
                     model_name,
                     i + 1,
                     is_retry,
+                    selected_provider,
                 ),
                 daemon=True,
             )
+
             threads.append(thread)
             thread.start()
 
@@ -1893,6 +1965,9 @@ def procesar_archivos_seleccionados(
             t.join()
 
         def actualizar_gui_final():
+            # NUEVA LÍNEA: Determinar el padre modal correcto para evitar ventanas ocultas
+            parent_window = tabla_treeview.winfo_toplevel() if tabla_treeview else ventana_principal
+            
             etiqueta_estado.config(
                 text=f"Procesamiento completado para {num_archivos} archivos."
             )
@@ -1902,22 +1977,29 @@ def procesar_archivos_seleccionados(
 
             if unprocessed_files_paths:
                 retry_button.config(state=tk.NORMAL)
+                if alt_retry_button:
+                    alt_retry_button.config(state=tk.NORMAL)
+                    target_name = "NVIDIA" if selected_provider == "OpenRouter" else "OpenRouter"
+                    alt_retry_button.config(text=f"Reintentar con {target_name}")
+                
                 messagebox.showwarning(
                     "Proceso con Fallos",
-                    f"{len(unprocessed_files_paths)} archivo(s) no se procesaron correctamente.\nPuede usar el botón 'Reintentar Archivos Fallidos' en la ventana de resultados para intentarlo de nuevo.",
-                    parent=ventana_principal,
+                    f"{len(unprocessed_files_paths)} archivo(s) no se procesaron correctamente.\nPuede usar los botones de reintento en la ventana de resultados para intentarlo de nuevo.",
+                    parent=parent_window,
                 )
             else:
                 retry_button.config(state=tk.DISABLED)
+                if alt_retry_button:
+                    alt_retry_button.config(state=tk.DISABLED)
 
             if original_file_list_for_saving:
                 directorio_salida = os.path.dirname(original_file_list_for_saving[0])
                 guardar_resultados_csv(
-                    processed_data_cache, directorio_salida, ventana_principal
+                    processed_data_cache, directorio_salida, parent_window
                 )
 
             mostrar_resumen_log_gui(
-                ventana_principal,
+                parent_window,
                 mensajes_resumen_procesamiento,
                 unprocessed_files_paths,
             )
@@ -1935,8 +2017,10 @@ def iniciar_procesamiento_en_hilo(
     etiqueta_etr,
     ventana_principal,
     model_vars,
+    provider_var,
 ):
     selected_models = [model_name for var, model_name in model_vars if var.get()]
+    selected_provider = provider_var.get()
 
     if not selected_models:
         messagebox.showerror(
@@ -1945,8 +2029,19 @@ def iniciar_procesamiento_en_hilo(
             parent=ventana_principal,
         )
         return
+    
+    # Validar que la API key del proveedor seleccionado esté configurada
+    if selected_provider == "NVIDIA" and not NVIDIA_API_KEY:
+        messagebox.showerror(
+            "API Key Faltante",
+            "Se seleccionó NVIDIA como proveedor pero no se encontró NVIDIA_API_KEY en el archivo .env",
+            parent=ventana_principal,
+        )
+        return
+
 
     retry_button_ref = None
+    alt_retry_button_ref = None
     tabla_treeview = None
 
     def iniciar_reintento():
@@ -2003,6 +2098,7 @@ def iniciar_procesamiento_en_hilo(
                     path, values=valores_reintento, tags=("accion", path, "")
                 )
 
+            # ESTA LÍNEA AHORA ESTÁ CORRECTAMENTE INDENTADA DENTRO DEL FOR
             archivos_para_reintentar.append((i, path, next_model))
 
         procesar_archivos_seleccionados(
@@ -2017,7 +2113,69 @@ def iniciar_procesamiento_en_hilo(
             retry_button_ref,
             selected_models_for_retry,
             is_retry=True,
+            selected_provider=selected_provider,
+            alt_retry_button=alt_retry_button_ref,
         )
+
+    def iniciar_reintento_alterno():
+        global unprocessed_files_paths, mensajes_resumen_procesamiento
+
+        # 1. Determinar el proveedor opuesto
+        current_p = provider_var.get()
+        target_provider = "NVIDIA" if current_p == "OpenRouter" else "OpenRouter"
+
+        # 2. Validar API Key del opuesto
+        if target_provider == "NVIDIA" and not NVIDIA_API_KEY:
+            messagebox.showerror("API Key Faltante", "No se encontró NVIDIA_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
+            return
+        if target_provider == "OpenRouter" and not OPENROUTER_API_KEY:
+            messagebox.showerror("API Key Faltante", "No se encontró OPENROUTER_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
+            return
+
+        # 3. Cargar modelos del opuesto (GLOBAL LISTS)
+        target_models = NVIDIA_MODELS if target_provider == "NVIDIA" else OPENROUTER_MODELS
+
+        files_to_retry_info = list(unprocessed_files_paths)
+        if not files_to_retry_info:
+            messagebox.showinfo("Información", "No hay archivos fallidos para reintentar.", parent=ventana_principal)
+            return
+
+        unprocessed_files_paths.clear()
+        mensajes_resumen_procesamiento.append(f"\n{'='*20} INICIANDO REINTENTO ALTERNO ({target_provider}) {'='*20}\n")
+
+        if retry_button_ref: retry_button_ref.config(state=tk.DISABLED)
+        if alt_retry_button_ref: alt_retry_button_ref.config(state=tk.DISABLED)
+        boton_seleccionar.config(state=tk.DISABLED)
+
+        archivos_para_reintentar = []
+        for i, file_info in enumerate(files_to_retry_info):
+            path = file_info["path"]
+            # Para reintento alterno, simplemente usamos el primer modelo del nuevo proveedor o repartimos
+            next_model = target_models[i % len(target_models)]
+
+            if tabla_treeview and tabla_treeview.exists(path):
+                valores_reintento = (os.path.basename(path), f"Reintentando ({target_provider})...", "...", "...", "...", "Abrir Archivo", "", "(Realizada)", "(Pendiente)")
+                tabla_treeview.item(path, values=valores_reintento, tags=("accion", path, ""))
+            
+            archivos_para_reintentar.append((i, path, next_model))
+
+        procesar_archivos_seleccionados(
+            archivos_para_reintentar,
+            boton_seleccionar,
+            boton_ver_tabla,
+            etiqueta_estado,
+            barra_progreso,
+            etiqueta_etr,
+            ventana_principal,
+            tabla_treeview,
+            retry_button_ref,
+            target_models,
+            is_retry=True,
+            selected_provider=target_provider,
+            alt_retry_button=alt_retry_button_ref,
+        )
+
+
 
     if boton_seleccionar:
         boton_seleccionar.config(state=tk.DISABLED)
@@ -2037,8 +2195,8 @@ def iniciar_procesamiento_en_hilo(
             boton_seleccionar.config(state=tk.NORMAL)
         return
 
-    tabla_treeview, retry_button_ref = crear_tabla_resumen_en_vivo(
-        ventana_principal, iniciar_reintento
+    tabla_treeview, retry_button_ref, alt_retry_button_ref = crear_tabla_resumen_en_vivo(
+        ventana_principal, iniciar_reintento, iniciar_reintento_alterno
     )
 
     try:
@@ -2080,7 +2238,11 @@ def iniciar_procesamiento_en_hilo(
             retry_button_ref,
             selected_models,
             is_retry=False,
+            selected_provider=selected_provider,
+            alt_retry_button=alt_retry_button_ref,
         )
+
+
     except FileNotFoundError as e:
         messagebox.showerror(
             "Error de Archivo",
@@ -2102,7 +2264,7 @@ def show_last_results_table(main_root_ref):
         )
         return
 
-    tabla_recreada, _ = crear_tabla_resumen_en_vivo(main_root_ref, lambda: None)
+    tabla_recreada, _, _ = crear_tabla_resumen_en_vivo(main_root_ref, lambda: None, lambda: None)
     toplevel_window = tabla_recreada.winfo_toplevel()
     toplevel_window.title("Última Tabla de Resultados Guardada")
 
@@ -2201,9 +2363,7 @@ FORMATO DE SALIDA (si no hay condiciones de parada):
     ; La siguiente línea es un placeholder que será reemplazado por el código Python.
     (LINEA_ENCABEZADO_AQUI)
     ; Para cada materia extraída de la TABLA DE DATOS (Materias) anterior, genera una línea Send con la siguiente estructura:
-    ; IMPORTANTE: Incluye el número de créditos de cada materia entre marcadores ##NUMERO## para validación posterior.
-    Send, (letras del codigo){Tab}(números del código){Tab}##NUMERO_CREDITO##{Tab}(calificación){Tab}N{Down}{Space}{Tab}
-
+    Send, (letras del codigo){Tab}(números del código){Tab}{Tab}(calificación){Tab}N{Down}{Space}{Tab}
     ; Para la última materia, omite {Down}{Space}{Tab} al final.
     --- FIN SCRIPT AUTOHOTKEY ---
 
@@ -2300,9 +2460,7 @@ FORMATO DE SALIDA (si no hay condiciones de parada):
     ; La siguiente línea es un placeholder que será reemplazado por el código Python.
     (LINEA_ENCABEZADO_AQUI)
     ; Para cada materia extraída de la TABLA DE DATOS (Materias) anterior, genera una línea Send con la siguiente estructura, ten encuenta que los parentesis son para indicar cada valor pero no incluyas los parentesis en las respuesta final:
-    ; IMPORTANTE: Incluye el número de créditos de cada materia entre marcadores ##NUMERO## para validación posterior.
-    Send, (letras del codigo){Tab}(números del código){Tab}##NUMERO_CREDITO##{Tab}(calificación){Tab}P{Down}{Space}{Tab}
-
+    Send, (letras del codigo){Tab}(números del código){Tab}{Tab}(calificación){Tab}P{Down}{Space}{Tab}
     ; Para la última materia, omite {Down}{Space}{Tab} al final.
     --- FIN SCRIPT AUTOHOTKEY ---
 
@@ -2379,7 +2537,7 @@ CONFIG_FILE = os.path.join(os.path.expanduser("~"), "ahk_processor_config.json")
 
 
 def load_model_config():
-    """Carga la configuración de modelos seleccionados desde un archivo JSON."""
+    """Carga la configuración de modelos seleccionados y proveedor desde un archivo JSON."""
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -2391,15 +2549,33 @@ def load_model_config():
     return {}
 
 
-def save_model_config(model_vars):
-    """Guarda el estado actual de los checkboxes de modelos en un archivo JSON."""
+def load_provider_config():
+    """Carga la configuración del proveedor seleccionado desde un archivo JSON."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                return config.get("provider", "OpenRouter")
+    except Exception as e:
+        print(
+            f"Advertencia: No se pudo cargar la configuración del proveedor. Usando valor por defecto. Error: {e}"
+        )
+    return "OpenRouter"
+
+
+
+def save_model_config(model_vars, provider_var=None):
+    """Guarda el estado actual de los checkboxes de modelos y el proveedor en un archivo JSON."""
     try:
         config_data = {name: var.get() for var, name in model_vars}
+        if provider_var:
+            config_data["provider"] = provider_var.get()
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config_data, f, indent=4)
-        print(f"Configuración de modelos guardada en: {CONFIG_FILE}")
+        print(f"Configuración de modelos y proveedor guardada en: {CONFIG_FILE}")
     except Exception as e:
         print(f"Error al guardar la configuración de modelos: {e}")
+
 
 
 # --- CONFIGURACIÓN DE TEXTOS PREDETERMINADOS PARA PENDIENTES ---
@@ -2455,20 +2631,81 @@ if __name__ == "__main__":
     )
     etiqueta_estado_gui.pack(pady=5)
 
+    # --- Selector de Proveedor ---
+    provider_frame = ttk.LabelFrame(
+        frame_izquierdo, text="Selección de Proveedor LLM", padding="10"
+    )
+    provider_frame.pack(pady=10, padx=10, fill=tk.X)
+
+    saved_config = load_model_config()
+    saved_provider = saved_config.get("provider", "OpenRouter")
+    
+    provider_var = tk.StringVar(value=saved_provider)
+    
+    provider_combo = ttk.Combobox(
+        provider_frame, 
+        textvariable=provider_var, 
+        values=["OpenRouter", "NVIDIA"], 
+        state="readonly",
+        width=30
+    )
+    provider_combo.pack(pady=5)
+    provider_combo.set(saved_provider)
+
     model_frame = ttk.LabelFrame(
         frame_izquierdo, text="Selección de Modelos Activos", padding="10"
     )
     model_frame.pack(pady=10, padx=10, fill=tk.X)
 
-    saved_config = load_model_config()
     model_checkbox_vars = []
+    model_checkbuttons = []  # Para poder limpiarlos dinámicamente
 
-    for model_name in WORKER_MODELS:
-        is_selected = saved_config.get(model_name, True)
-        var = tk.BooleanVar(value=is_selected)
-        cb = ttk.Checkbutton(model_frame, text=model_name, variable=var)
-        cb.pack(anchor="w", padx=5)
-        model_checkbox_vars.append((var, model_name))
+    def actualizar_lista_modelos(evento=None):
+        """Actualiza la lista de modelos según el proveedor seleccionado."""
+        global WORKER_MODELS, CURRENT_PROVIDER
+        
+        proveedor_seleccionado = provider_var.get()
+        CURRENT_PROVIDER = proveedor_seleccionado
+        
+        # Limpiar checkboxes existentes
+        for widget in model_frame.winfo_children():
+            widget.destroy()
+        
+        model_checkbox_vars.clear()
+        model_checkbuttons.clear()
+        
+        # Seleccionar la lista de modelos correspondiente
+        if proveedor_seleccionado == "NVIDIA":
+            WORKER_MODELS = NVIDIA_MODELS[:]
+        else:
+            WORKER_MODELS = OPENROUTER_MODELS[:]
+        
+        # Cargar configuración guardada para este proveedor
+        config_key_prefix = f"{proveedor_seleccionado.lower()}_"
+        
+        # Crear nuevos checkboxes
+        for model_name in WORKER_MODELS:
+            config_key = f"{config_key_prefix}{model_name}"
+            is_selected = saved_config.get(config_key, True)
+            var = tk.BooleanVar(value=is_selected)
+            cb = ttk.Checkbutton(model_frame, text=model_name, variable=var)
+            cb.pack(anchor="w", padx=5)
+            model_checkbox_vars.append((var, model_name))
+            model_checkbuttons.append(cb)
+        
+        # Actualizar etiqueta de estado
+        etiqueta_estado_gui.config(
+            text=f"Proveedor: {proveedor_seleccionado} | {len(WORKER_MODELS)} modelos disponibles"
+        )
+        
+        print(f"Proveedor cambiado a: {proveedor_seleccionado}. Modelos cargados: {len(WORKER_MODELS)}")
+
+    # Vincular el evento de cambio de proveedor
+    provider_combo.bind("<<ComboboxSelected>>", actualizar_lista_modelos)
+
+    # Inicializar con el proveedor guardado o por defecto
+    actualizar_lista_modelos()
+
 
     model_button_frame = ttk.Frame(model_frame)
     model_button_frame.pack(fill=tk.X, pady=(10, 0))
@@ -2480,6 +2717,7 @@ if __name__ == "__main__":
     def deselect_all_models():
         for var, _ in model_checkbox_vars:
             var.set(False)
+
 
     select_all_button = ttk.Button(
         model_button_frame, text="Seleccionar Todos", command=select_all_models
@@ -2522,9 +2760,11 @@ if __name__ == "__main__":
             etiqueta_etr_gui,
             ventana_principal_app,
             model_checkbox_vars,
+            provider_var,
         ),
     )
     boton_seleccionar_gui.pack(pady=5)
+
 
     # --- NUEVO: Sección de Notas en el frame derecho ---
     notes_frame = ttk.LabelFrame(frame_derecho, text="Notas Rápidas", padding="10")
@@ -2560,8 +2800,14 @@ if __name__ == "__main__":
         print(
             "ADVERTENCIA: No se encontró OPENROUTER_API_KEY_2 en .env. Fallback secundario de OpenRouter inactivo."
         )
+    
+    if not NVIDIA_API_KEY:
+        print(
+            "ADVERTENCIA: No se encontró NVIDIA_API_KEY en .env. El proveedor NVIDIA no estará disponible."
+        )
 
     if keys_faltantes:
+
         mensaje_error = (
             "ERROR: Faltan claves obligatorias en el archivo .env:\n\n"
             + "\n".join(keys_faltantes)
@@ -2577,8 +2823,9 @@ if __name__ == "__main__":
         )
 
     def on_closing():
-        save_model_config(model_checkbox_vars)
+        save_model_config(model_checkbox_vars, provider_var)
         ventana_principal_app.destroy()
+
 
     ventana_principal_app.protocol("WM_DELETE_WINDOW", on_closing)
 

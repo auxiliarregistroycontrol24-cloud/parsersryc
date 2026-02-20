@@ -73,10 +73,13 @@ OPENROUTER_MODELS = [
 
 NVIDIA_MODELS = [
     "deepseek-ai/deepseek-v3.1",
-    "moonshotai/kimi-k2.5",
-    "meta/llama-3.1-8b-instruct",
-    "meta/llama-3.3-70b-instruct",
-    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "z-ai/glm5",
+    "deepseek-ai/deepseek-v3.1-terminus",
+    "deepseek-ai/deepseek-v3.2",
+    #"moonshotai/kimi-k2.5",
+    #"meta/llama-3.1-8b-instruct",
+    #"meta/llama-3.3-70b-instruct",
+    #"nvidia/llama-3.1-nemotron-70b-instruct",
 ]
 
 # Inicialización por defecto con OpenRouter
