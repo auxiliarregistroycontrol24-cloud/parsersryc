@@ -73,7 +73,7 @@ OPENROUTER_MODELS = [
 
 NVIDIA_MODELS = [
     "deepseek-ai/deepseek-v3.1",
-    "z-ai/glm5",
+    #"z-ai/glm5",
     "deepseek-ai/deepseek-v3.1-terminus",
     "deepseek-ai/deepseek-v3.2",
     #"moonshotai/kimi-k2.5",
