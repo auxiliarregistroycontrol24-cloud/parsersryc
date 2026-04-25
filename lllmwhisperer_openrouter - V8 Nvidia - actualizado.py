@@ -17,6 +17,7 @@ import time
 import subprocess
 from dotenv import load_dotenv
 import google.generativeai as genai
+from parche_exportar_llmwhisperer import lanzar_exportacion_llmwhisperer_en_hilo
 
 load_dotenv()
 
@@ -36,49 +37,16 @@ NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 CURRENT_PROVIDER = "OpenRouter"
 
 OPENROUTER_MODELS = [
-
-    # "deepseek/deepseek-chat-v3-0324:free",
-    "moonshotai/kimi-k2:free",
-    # "x-ai/grok-4-fast:free",
-    "tngtech/deepseek-r1t2-chimera:free",
-    # "tngtech/deepseek-r1t2-chimera:free",
-    "deepseek/deepseek-r1-0528:free",
-    "deepseek/deepseek-r1:free",
-    "tngtech/deepseek-r1t-chimera:free",
-    "meituan/longcat-flash-chat",
-    "minimax/minimax-m2:free",
-    # "x-ai/grok-4.1-fast:free",
-    "tngtech/tng-r1t-chimera:free",
-    "arcee-ai/trinity-mini:free",
-    "nex-agi/deepseek-v3.1-nex-n1:free",
-    # "xiaomi/mimo-v2-flash:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "openrouter/aurora-alpha",
-    "stepfun/step-3.5-flash:free",
-    "arcee-ai/trinity-large-preview:free",
-    # "openrouter/sherlock-dash-alpha",
-    # "openrouter/sherlock-think-alpha",
-    # "openrouter/polaris-alpha",
-    # "nvidia/nemotron-nano-12b-v2-vl:free",
-    # "deepseek/deepseek-chat-v3.1:free",
-    # "openai/gpt-oss-120b:free",
-    # "deepseek/deepseek-r1-0528-qwen3-8b:free",
-    # "deepseek/deepseek-r1-distill-llama-70b:free",
-    # "deepseek/deepseek-r1-distill-qwen-14b:free",
-    # "qwen/qwen3-235b-a22b:free",
-    # "openai/gpt-oss-20b:free",
-    # "nvidia/nemotron-nano-9b-v2:free",
+    "minimax/minimax-m2.5:free",
 ]
 
 NVIDIA_MODELS = [
-    "deepseek-ai/deepseek-v3.1",
+    #"deepseek-ai/deepseek-v3.1",
     #"z-ai/glm5",
-    "deepseek-ai/deepseek-v3.1-terminus",
-    "deepseek-ai/deepseek-v3.2",
+    #"deepseek-ai/deepseek-v3.1-terminus",
+    #"deepseek-ai/deepseek-v3.2",
+    "deepseek-ai/deepseek-v4-pro",
     #"moonshotai/kimi-k2.5",
-    #"meta/llama-3.1-8b-instruct",
-    #"meta/llama-3.3-70b-instruct",
     #"nvidia/llama-3.1-nemotron-70b-instruct",
 ]
 
@@ -2765,6 +2733,33 @@ if __name__ == "__main__":
     )
     boton_seleccionar_gui.pack(pady=5)
 
+    # --- NUEVO: Botón Exportar LLMWhisperer a Excel ---
+    def _seleccionar_y_exportar_llmwhisperer():
+        archivos = filedialog.askopenfilenames(
+            title="Seleccione PDFs o Excel para extraer con LLMWhisperer",
+            filetypes=[
+                ("Documentos soportados", "*.pdf *.xlsx *.xls"),
+                ("PDF", "*.pdf"),
+                ("Excel", "*.xlsx *.xls"),
+            ],
+            parent=ventana_principal_app,
+        )
+        if archivos:
+            lanzar_exportacion_llmwhisperer_en_hilo(
+                list(archivos),
+                ventana_principal_app,
+                extraer_texto_pdf_con_apis,
+                extraer_texto_excel_con_pandas,
+                etiqueta_estado=etiqueta_estado_gui,
+                barra_progreso=barra_progreso_gui,
+            )
+
+    boton_exportar_llm_gui = ttk.Button(
+        botones_frame,
+        text="📊 Exportar LLMWhisperer → Excel",
+        command=_seleccionar_y_exportar_llmwhisperer,
+    )
+    boton_exportar_llm_gui.pack(pady=5)
 
     # --- NUEVO: Sección de Notas en el frame derecho ---
     notes_frame = ttk.LabelFrame(frame_derecho, text="Notas Rápidas", padding="10")
