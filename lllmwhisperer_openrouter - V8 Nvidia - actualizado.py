@@ -46,6 +46,7 @@ NVIDIA_MODELS = [
     #"deepseek-ai/deepseek-v3.1-terminus",
     #"deepseek-ai/deepseek-v3.2",
     "deepseek-ai/deepseek-v4-pro",
+    "stepfun-ai/step-3.5-flash",
     #"moonshotai/kimi-k2.5",
     #"nvidia/llama-3.1-nemotron-70b-instruct",
 ]
