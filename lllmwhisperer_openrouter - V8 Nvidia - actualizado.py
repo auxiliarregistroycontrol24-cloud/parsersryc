@@ -29,9 +29,11 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_KEY_2 = os.getenv("OPENROUTER_API_KEY_2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+NOUSRESEARCH_API_KEY = os.getenv("NOUSRESEARCH_API_KEY")
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NOUSRESEARCH_API_URL = "https://inference-api.nousresearch.com/v1/chat/completions"
 
 # --- CONFIGURACIÓN DE WORKERS Y MODELOS ---
 CURRENT_PROVIDER = "OpenRouter"
@@ -50,6 +52,62 @@ NVIDIA_MODELS = [
     #"moonshotai/kimi-k2.5",
     #"nvidia/llama-3.1-nemotron-70b-instruct",
 ]
+
+NOUSRESEARCH_MODELS = [
+    "stepfun/step-3.7-flash:free",
+]
+
+PROVIDER_ORDER = ["OpenRouter", "NVIDIA", "NousResearch"]
+
+
+def get_provider_models(provider):
+    """Devuelve la lista de modelos configurada para cada proveedor."""
+    if provider == "NVIDIA":
+        return NVIDIA_MODELS[:]
+    if provider == "NousResearch":
+        return NOUSRESEARCH_MODELS[:]
+    return OPENROUTER_MODELS[:]
+
+
+def get_provider_api_url(provider):
+    """Devuelve la URL de API correcta para cada proveedor."""
+    if provider == "NVIDIA":
+        return NVIDIA_API_URL
+    if provider == "NousResearch":
+        return NOUSRESEARCH_API_URL
+    return OPENROUTER_API_URL
+
+
+def provider_has_api_key(provider):
+    """Verifica si el proveedor seleccionado tiene API key disponible en .env."""
+    if provider == "NVIDIA":
+        return bool(NVIDIA_API_KEY)
+    if provider == "NousResearch":
+        return bool(NOUSRESEARCH_API_KEY)
+    return bool(OPENROUTER_API_KEY)
+
+
+def get_provider_api_key_name(provider):
+    """Nombre de la variable .env requerida por proveedor."""
+    if provider == "NVIDIA":
+        return "NVIDIA_API_KEY"
+    if provider == "NousResearch":
+        return "NOUSRESEARCH_API_KEY"
+    return "OPENROUTER_API_KEY"
+
+
+def get_alternate_provider(current_provider):
+    """Busca un proveedor alterno disponible para reintentos."""
+    if current_provider not in PROVIDER_ORDER:
+        current_provider = "OpenRouter"
+
+    start_index = PROVIDER_ORDER.index(current_provider)
+    for offset in range(1, len(PROVIDER_ORDER) + 1):
+        candidate = PROVIDER_ORDER[(start_index + offset) % len(PROVIDER_ORDER)]
+        if candidate != current_provider and provider_has_api_key(candidate) and get_provider_models(candidate):
+            return candidate
+    return None
+
 
 # Inicialización por defecto con OpenRouter
 WORKER_MODELS = OPENROUTER_MODELS[:]
@@ -661,6 +719,97 @@ def analizar_con_llm(
                 mensajes_resumen_procesamiento.append(msg + f"\n{traceback.format_exc()}")
             return None
     
+    elif provider == "NousResearch":
+        api_token = NOUSRESEARCH_API_KEY
+        if not api_token:
+            msg = f"❌ No hay una clave de API de NousResearch válida para '{nombre_archivo_base}'."
+            print(msg)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg)
+            return None
+
+        print(
+            f"\nPreparando para enviar a NousResearch API para '{nombre_archivo_base}' usando modelo '{model_name}'..."
+        )
+
+        prompt_completo = f"Aquí tienes el contenido de un documento (originalmente '{nombre_archivo_base}'):\n--- INICIO DEL DOCUMENTO ---\n{texto_documento}\n--- FIN DEL DOCUMENTO ---\nPor favor, sigue estas instrucciones detalladamente basadas ÚNICAMENTE en el documento proporcionado:\n{pregunta_o_instruccion}"
+
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Eres un asistente experto en extracción precisa de datos y generación de scripts AutoHotkey. Responde únicamente con el formato solicitado por la instrucción del usuario.",
+                },
+                {"role": "user", "content": prompt_completo},
+            ],
+            "stream": False,
+            "max_tokens": 4000,
+            "temperature": 0.15,
+        }
+
+        try:
+            payload_size = len(json.dumps(data))
+            print(
+                f"Enviando solicitud a NousResearch API (modelo: {model_name}) para '{nombre_archivo_base}'..."
+            )
+            print(f"DEBUG: Tamaño del payload: {payload_size} bytes.")
+            response = requests.post(
+                api_url, headers=headers, data=json.dumps(data), timeout=360
+            )
+            response.raise_for_status()
+            respuesta_json = response.json()
+            print(f"✅ Respuesta recibida de NousResearch API para '{nombre_archivo_base}'.")
+            if (
+                respuesta_json.get("choices")
+                and len(respuesta_json["choices"]) > 0
+                and respuesta_json["choices"][0].get("message")
+                and "content" in respuesta_json["choices"][0]["message"]
+            ):
+                return respuesta_json["choices"][0]["message"]["content"]
+            else:
+                msg = f"❌ Error API NousResearch '{nombre_archivo_base}': Respuesta sin formato esperado."
+                print(msg)
+                with thread_lock:
+                    mensajes_resumen_procesamiento.append(msg)
+                return None
+        except requests.exceptions.Timeout as e:
+            msg = f"❌ Error API NousResearch '{nombre_archivo_base}': Timeout después de 360 segundos (Modelo: {model_name})."
+            print(msg)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg)
+            raise ServerSideApiException(msg) from e
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else 0
+            details = (
+                f"Detalles: {status_code} - {e.response.text}"
+                if e.response is not None
+                else ""
+            )
+            msg = f"❌ Error API NousResearch '{nombre_archivo_base}' (Modelo: {model_name}): {e}"
+
+            print(msg)
+            print(details)
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(f"{msg}\n{details}")
+
+            if status_code == 429:
+                raise RateLimitException(msg) from e
+            if 500 <= status_code < 600:
+                raise ServerSideApiException(msg) from e
+            return None
+        except Exception as e:
+            msg = f"❌ Error inesperado con NousResearch API para '{nombre_archivo_base}': {e}"
+            print(msg)
+            traceback.print_exc()
+            with thread_lock:
+                mensajes_resumen_procesamiento.append(msg + f"\n{traceback.format_exc()}")
+            return None
+
     else:  # OpenRouter (default)
         with thread_lock:
             current_api_key_num = (
@@ -1698,7 +1847,7 @@ def worker_process_file(
                         f"INFO: Intentando análisis con el modelo asignado: {model_a_usar} (Proveedor: {selected_provider})."
                     )
                     # Seleccionar la URL correcta según el proveedor
-                    api_url_to_use = NVIDIA_API_URL if selected_provider == "NVIDIA" else OPENROUTER_API_URL
+                    api_url_to_use = get_provider_api_url(selected_provider)
                     respuesta_llm = analizar_con_llm(
                         texto_limpio_para_llm,
                         prompt_a_usar,
@@ -1948,7 +2097,7 @@ def procesar_archivos_seleccionados(
                 retry_button.config(state=tk.NORMAL)
                 if alt_retry_button:
                     alt_retry_button.config(state=tk.NORMAL)
-                    target_name = "NVIDIA" if selected_provider == "OpenRouter" else "OpenRouter"
+                    target_name = get_alternate_provider(selected_provider) or "otro proveedor"
                     alt_retry_button.config(text=f"Reintentar con {target_name}")
                 
                 messagebox.showwarning(
@@ -2000,10 +2149,10 @@ def iniciar_procesamiento_en_hilo(
         return
     
     # Validar que la API key del proveedor seleccionado esté configurada
-    if selected_provider == "NVIDIA" and not NVIDIA_API_KEY:
+    if not provider_has_api_key(selected_provider):
         messagebox.showerror(
             "API Key Faltante",
-            "Se seleccionó NVIDIA como proveedor pero no se encontró NVIDIA_API_KEY en el archivo .env",
+            f"Se seleccionó {selected_provider} como proveedor pero no se encontró {get_provider_api_key_name(selected_provider)} en el archivo .env",
             parent=ventana_principal,
         )
         return
@@ -2089,20 +2238,20 @@ def iniciar_procesamiento_en_hilo(
     def iniciar_reintento_alterno():
         global unprocessed_files_paths, mensajes_resumen_procesamiento
 
-        # 1. Determinar el proveedor opuesto
+        # 1. Determinar un proveedor alterno disponible
         current_p = provider_var.get()
-        target_provider = "NVIDIA" if current_p == "OpenRouter" else "OpenRouter"
+        target_provider = get_alternate_provider(current_p)
 
-        # 2. Validar API Key del opuesto
-        if target_provider == "NVIDIA" and not NVIDIA_API_KEY:
-            messagebox.showerror("API Key Faltante", "No se encontró NVIDIA_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
-            return
-        if target_provider == "OpenRouter" and not OPENROUTER_API_KEY:
-            messagebox.showerror("API Key Faltante", "No se encontró OPENROUTER_API_KEY en el archivo .env para el reintento alterno.", parent=ventana_principal)
+        if not target_provider:
+            messagebox.showerror(
+                "Proveedor alterno no disponible",
+                "No se encontró otro proveedor con API key configurada en el archivo .env para el reintento alterno.",
+                parent=ventana_principal,
+            )
             return
 
-        # 3. Cargar modelos del opuesto (GLOBAL LISTS)
-        target_models = NVIDIA_MODELS if target_provider == "NVIDIA" else OPENROUTER_MODELS
+        # 2. Cargar modelos del proveedor alterno
+        target_models = get_provider_models(target_provider)
 
         files_to_retry_info = list(unprocessed_files_paths)
         if not files_to_retry_info:
@@ -2608,13 +2757,15 @@ if __name__ == "__main__":
 
     saved_config = load_model_config()
     saved_provider = saved_config.get("provider", "OpenRouter")
+    if saved_provider not in PROVIDER_ORDER:
+        saved_provider = "OpenRouter"
     
     provider_var = tk.StringVar(value=saved_provider)
     
     provider_combo = ttk.Combobox(
         provider_frame, 
         textvariable=provider_var, 
-        values=["OpenRouter", "NVIDIA"], 
+        values=PROVIDER_ORDER, 
         state="readonly",
         width=30
     )
@@ -2628,6 +2779,8 @@ if __name__ == "__main__":
 
     model_checkbox_vars = []
     model_checkbuttons = []  # Para poder limpiarlos dinámicamente
+    model_checkbox_container = ttk.Frame(model_frame)
+    model_checkbox_container.pack(fill=tk.X)
 
     def actualizar_lista_modelos(evento=None):
         """Actualiza la lista de modelos según el proveedor seleccionado."""
@@ -2637,17 +2790,14 @@ if __name__ == "__main__":
         CURRENT_PROVIDER = proveedor_seleccionado
         
         # Limpiar checkboxes existentes
-        for widget in model_frame.winfo_children():
+        for widget in model_checkbox_container.winfo_children():
             widget.destroy()
         
         model_checkbox_vars.clear()
         model_checkbuttons.clear()
         
         # Seleccionar la lista de modelos correspondiente
-        if proveedor_seleccionado == "NVIDIA":
-            WORKER_MODELS = NVIDIA_MODELS[:]
-        else:
-            WORKER_MODELS = OPENROUTER_MODELS[:]
+        WORKER_MODELS = get_provider_models(proveedor_seleccionado)
         
         # Cargar configuración guardada para este proveedor
         config_key_prefix = f"{proveedor_seleccionado.lower()}_"
@@ -2657,7 +2807,7 @@ if __name__ == "__main__":
             config_key = f"{config_key_prefix}{model_name}"
             is_selected = saved_config.get(config_key, True)
             var = tk.BooleanVar(value=is_selected)
-            cb = ttk.Checkbutton(model_frame, text=model_name, variable=var)
+            cb = ttk.Checkbutton(model_checkbox_container, text=model_name, variable=var)
             cb.pack(anchor="w", padx=5)
             model_checkbox_vars.append((var, model_name))
             model_checkbuttons.append(cb)
@@ -2800,6 +2950,11 @@ if __name__ == "__main__":
     if not NVIDIA_API_KEY:
         print(
             "ADVERTENCIA: No se encontró NVIDIA_API_KEY en .env. El proveedor NVIDIA no estará disponible."
+        )
+
+    if not NOUSRESEARCH_API_KEY:
+        print(
+            "ADVERTENCIA: No se encontró NOUSRESEARCH_API_KEY en .env. El proveedor NousResearch no estará disponible."
         )
 
     if keys_faltantes:
